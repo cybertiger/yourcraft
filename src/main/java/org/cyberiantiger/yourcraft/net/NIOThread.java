@@ -25,12 +25,18 @@ public class NIOThread implements Runnable, Closeable {
     private static final int MAX_WAIT_MILLIS = 1000;
     private static final Logger LOG = Logger.getLogger(NIOThread.class.getName());
     private Selector selector;
+    private int maxWaitMillis;
     private PriorityQueue<Task> internalTasks;
     private ConcurrentLinkedQueue<Runnable> externalTasks;
     private Set<KeyAttachment> updatedAttachments;
     private Thread thread;
 
     public NIOThread() throws IOException {
+        this(MAX_WAIT_MILLIS);
+    }
+    
+    public NIOThread(int maxWaitMillis) throws IOException {
+        this.maxWaitMillis = maxWaitMillis;
         this.selector = Selector.open();
         internalTasks = new PriorityQueue<>();
         externalTasks = new ConcurrentLinkedQueue<>();
@@ -51,14 +57,12 @@ public class NIOThread implements Runnable, Closeable {
 
     public void addAttachment(KeyAttachment attachment) throws ClosedChannelException {
         checkThread();
-        attachment.getChannel().register(selector, attachment.interestOps(), attachment);
+        attachment.register(this, selector);
     }
 
     public void removeAttachment(KeyAttachment attachment) {
         checkThread();
-        SelectionKey key = attachment.getChannel().keyFor(selector);
-        if (key != null) 
-            key.cancel();
+        attachment.deregister(this, selector);
     }
 
     public void updateAttachment(KeyAttachment attachement) {
@@ -105,46 +109,45 @@ public class NIOThread implements Runnable, Closeable {
                     if (wait <= 0) {
                         selected = selector.selectNow();
                     } else {
-                        selected = selector.select(Math.min(wait, MAX_WAIT_MILLIS));
+                        selected = selector.select(Math.min(wait, maxWaitMillis));
                     }
                 } else {
-                    selected = selector.select(MAX_WAIT_MILLIS);
+                    selected = selector.select(maxWaitMillis);
                 }
-                if (selected > 0) {
-                    Set<SelectionKey> selectedKeys = selector.selectedKeys();
-                    for (SelectionKey key : selectedKeys) {
-                        KeyAttachment attachment = (KeyAttachment) key.attachment();
-                        if (key.isAcceptable()) {
-                            try {
-                                attachment.accept();
-                            } catch (Exception ex) {
-                                Logger.getLogger(NIOThread.class.getName()).log(Level.SEVERE, null, ex);
-                            }
-                        }
-                        if (key.isConnectable()) {
-                            try {
-                                attachment.connect();
-                            } catch (Exception ex) {
-                                Logger.getLogger(NIOThread.class.getName()).log(Level.SEVERE, null, ex);
-                            }
-                        }
-                        if (key.isReadable()) {
-                            try {
-                                attachment.read();
-                            } catch (Exception ex) {
-                                Logger.getLogger(NIOThread.class.getName()).log(Level.SEVERE, null, ex);
-                            }
-                        }
-                        if (key.isWritable()) {
-                            try {
-                                attachment.write();
-                            } catch (Exception ex) {
-                                Logger.getLogger(NIOThread.class.getName()).log(Level.SEVERE, null, ex);
-                            }
+                Set<SelectionKey> selectedKeys = selector.selectedKeys();
+                for (SelectionKey key : selectedKeys) {
+                    KeyAttachment attachment = (KeyAttachment) key.attachment();
+                    // XXX: The order these are processed in is important, revisit later.
+                    if (key.isAcceptable()) {
+                        try {
+                            attachment.accept();
+                        } catch (Exception ex) {
+                            Logger.getLogger(NIOThread.class.getName()).log(Level.SEVERE, null, ex);
                         }
                     }
-                    selectedKeys.clear();
+                    if (key.isConnectable()) {
+                        try {
+                            attachment.connect();
+                        } catch (Exception ex) {
+                            Logger.getLogger(NIOThread.class.getName()).log(Level.SEVERE, null, ex);
+                        }
+                    }
+                    if (key.isReadable()) {
+                        try {
+                            attachment.read();
+                        } catch (Exception ex) {
+                            Logger.getLogger(NIOThread.class.getName()).log(Level.SEVERE, null, ex);
+                        }
+                    }
+                    if (key.isWritable()) {
+                        try {
+                            attachment.write();
+                        } catch (Exception ex) {
+                            Logger.getLogger(NIOThread.class.getName()).log(Level.SEVERE, null, ex);
+                        }
+                    }
                 }
+                selectedKeys.clear();
             } catch (IOException ex) {
                 // Error on select() handled here.
                 Logger.getLogger(NIOThread.class.getName()).log(Level.SEVERE, null, ex);

@@ -8,7 +8,7 @@ package org.cyberiantiger.yourcraft.net;
  *
  * @author antony
  */
-public class Task implements Comparable<Task> {
+class Task implements Comparable<Task> {
     private final long when;
     private final Runnable target;
 
